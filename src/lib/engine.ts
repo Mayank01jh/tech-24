@@ -679,8 +679,30 @@ export async function runIngestionPipeline(): Promise<{
   `);
   const updateArticleEvent = db.prepare(`UPDATE raw_articles SET event_id = ? WHERE id = ?`);
 
+  const getExistingEvents = db.prepare("SELECT id, title FROM tech_events WHERE created_at >= datetime('now', '-24 hours')");
+  const existingEvents = getExistingEvents.all() as unknown as { id: number; title: string }[];
+
   for (const cluster of clusters) {
     const titles = cluster.map(a => a.original_title);
+    
+    // Deduplication check against existing events in the database
+    let matchedExistingEventId: number | null = null;
+    for (const exEvent of existingEvents) {
+      const sim = getTitleSimilarity(titles[0], exEvent.title);
+      if (sim > 0.22) {
+        matchedExistingEventId = exEvent.id;
+        break;
+      }
+    }
+
+    if (matchedExistingEventId !== null) {
+      log(`[Deduplicate] Cluster representative "${titles[0]}" matches existing event ID ${matchedExistingEventId}. Linking articles and skipping.`);
+      for (const art of cluster) {
+        if (art.id) updateArticleEvent.run(matchedExistingEventId, art.id);
+      }
+      continue;
+    }
+
     const articlesListText = cluster.map(a => `- [${a.source_name}] ${a.original_title} (${a.url})`).join('\n');
 
     // Prefer high-trust sources for the primary link

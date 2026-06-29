@@ -559,10 +559,10 @@ export async function runIngestionPipeline(): Promise<{
   };
 
   log('Starting ingestion pipeline...');
-  const db = getDb();
+  const db = await getDb();
 
-  const getSourcesStmt = db.prepare('SELECT * FROM sources');
-  const dbSources = getSourcesStmt.all() as unknown as { id: number; name: string; url: string; category: string }[];
+  const getSourcesRes = await db.execute('SELECT * FROM sources');
+  const dbSources = getSourcesRes.rows as unknown as { id: number; name: string; url: string; category: string }[];
 
   let totalFetched = 0;
   const allRawArticles: Omit<RawArticle, 'id'>[] = [];
@@ -622,21 +622,19 @@ export async function runIngestionPipeline(): Promise<{
 
   // Insert raw articles, skipping duplicates
   log('Saving raw articles to database...');
-  const insertArticle = db.prepare(`
-    INSERT OR IGNORE INTO raw_articles (source_id, original_title, url, fetched_at)
-    VALUES (?, ?, ?, datetime('now', 'utc'))
-  `);
-
   let newArticlesCount = 0;
   for (const art of allRawArticles) {
-    const res = insertArticle.run(art.source_id, art.original_title, art.url) as { changes: number };
-    if (res.changes > 0) newArticlesCount++;
+    const res = await db.execute({
+      sql: 'INSERT OR IGNORE INTO raw_articles (source_id, original_title, url, fetched_at) VALUES (?, ?, ?, datetime(\'now\', \'utc\'))',
+      args: [art.source_id, art.original_title, art.url]
+    });
+    if (res.rowsAffected > 0) newArticlesCount++;
   }
   log(`Ingested ${newArticlesCount} new unique articles.`);
 
   // Load ungrouped articles from the last 24 hours
   log('Loading ungrouped articles from the past 24 hours...');
-  const getUngrouped = db.prepare(`
+  const getUngroupedRes = await db.execute(`
     SELECT r.*, s.name as source_name
     FROM raw_articles r
     JOIN sources s ON r.source_id = s.id
@@ -644,7 +642,7 @@ export async function runIngestionPipeline(): Promise<{
       AND r.fetched_at >= datetime('now', '-24 hours')
   `);
 
-  const ungroupedArticles = getUngrouped.all() as unknown as RawArticle[];
+  const ungroupedArticles = getUngroupedRes.rows as unknown as RawArticle[];
   log(`Found ${ungroupedArticles.length} ungrouped articles from the last 24 hours.`);
 
   if (ungroupedArticles.length === 0) {
@@ -673,14 +671,9 @@ export async function runIngestionPipeline(): Promise<{
 
   // Create Events
   let eventsCreated = 0;
-  const insertEvent = db.prepare(`
-    INSERT INTO tech_events (title, ai_summary, impact_score, category, primary_link, created_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now', 'utc'))
-  `);
-  const updateArticleEvent = db.prepare(`UPDATE raw_articles SET event_id = ? WHERE id = ?`);
 
-  const getExistingEvents = db.prepare("SELECT id, title FROM tech_events WHERE created_at >= datetime('now', '-24 hours')");
-  const existingEvents = getExistingEvents.all() as unknown as { id: number; title: string }[];
+  const getExistingEventsRes = await db.execute("SELECT id, title FROM tech_events WHERE created_at >= datetime('now', '-24 hours')");
+  const existingEvents = getExistingEventsRes.rows as unknown as { id: number; title: string }[];
 
   for (const cluster of clusters) {
     const titles = cluster.map(a => a.original_title);
@@ -698,7 +691,12 @@ export async function runIngestionPipeline(): Promise<{
     if (matchedExistingEventId !== null) {
       log(`[Deduplicate] Cluster representative "${titles[0]}" matches existing event ID ${matchedExistingEventId}. Linking articles and skipping.`);
       for (const art of cluster) {
-        if (art.id) updateArticleEvent.run(matchedExistingEventId, art.id);
+        if (art.id) {
+          await db.execute({
+            sql: 'UPDATE raw_articles SET event_id = ? WHERE id = ?',
+            args: [matchedExistingEventId, art.id]
+          });
+        }
       }
       continue;
     }
@@ -722,32 +720,36 @@ export async function runIngestionPipeline(): Promise<{
       who: enriched.summary_who
     });
 
-    const eventResult = insertEvent.run(
-      enriched.title, summaryText, enriched.impact_score, enriched.category, enriched.primary_link
-    ) as { lastInsertRowid: number };
+    const eventResult = await db.execute({
+      sql: 'INSERT INTO tech_events (title, ai_summary, impact_score, category, primary_link, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\', \'utc\'))',
+      args: [enriched.title, summaryText, enriched.impact_score, enriched.category, enriched.primary_link]
+    });
 
-    const newEventId = eventResult.lastInsertRowid;
+    const newEventId = Number(eventResult.lastInsertRowid);
     eventsCreated++;
 
     for (const art of cluster) {
-      if (art.id) updateArticleEvent.run(newEventId, art.id);
+      if (art.id) {
+        await db.execute({
+          sql: 'UPDATE raw_articles SET event_id = ? WHERE id = ?',
+          args: [newEventId, art.id]
+        });
+      }
     }
   }
 
   // ─── 6. Data Cleanup — 24-hour retention policy ───────────────
   log('Running retention policy (purging data older than 24 hours)...');
 
-  const purgeArticles = db.prepare("DELETE FROM raw_articles WHERE fetched_at < datetime('now', '-24 hours')");
-  const purgedArticlesRes = purgeArticles.run() as { changes: number };
-  log(`Purged ${purgedArticlesRes.changes} raw articles older than 24 hours.`);
+  const purgedArticlesRes = await db.execute("DELETE FROM raw_articles WHERE fetched_at < datetime('now', '-24 hours')");
+  log(`Purged ${purgedArticlesRes.rowsAffected} raw articles older than 24 hours.`);
 
-  const purgeEvents = db.prepare(`
+  const purgedEventsRes = await db.execute(`
     DELETE FROM tech_events
     WHERE created_at < datetime('now', '-24 hours')
       AND id NOT IN (SELECT event_id FROM bookmarks)
   `);
-  const purgedEventsRes = purgeEvents.run() as { changes: number };
-  log(`Purged ${purgedEventsRes.changes} un-bookmarked events older than 24 hours.`);
+  log(`Purged ${purgedEventsRes.rowsAffected} un-bookmarked events older than 24 hours.`);
 
   log('Ingestion pipeline completed successfully!');
   return { articlesFetched: totalFetched, newArticles: newArticlesCount, eventsCreated, logs };

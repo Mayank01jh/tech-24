@@ -155,9 +155,7 @@ export default function Tech24Dashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedEvent, setSelectedEvent] = useState<TechEvent | null>(null);
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
-  const [controlDrawerOpen, setControlDrawerOpen] = useState<boolean>(false);
   const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false);
-  const [controlDrawerOpen, setControlDrawerOpen] = useState<boolean>(false);
   const [countdownText, setCountdownText] = useState<string>('01:00');
   const [countdownPct, setCountdownPct] = useState<number>(100);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');

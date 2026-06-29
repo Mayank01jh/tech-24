@@ -624,6 +624,28 @@ export default function Tech24Dashboard() {
                         <CategoryIcon category={event.category} />
                         {event.category}
                       </span>
+                      <span className="source-pill" style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.25rem',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        background: 'rgba(139, 92, 246, 0.08)',
+                        color: 'var(--purple-light)',
+                        border: '1px solid rgba(139, 92, 246, 0.2)',
+                        padding: '0.22rem 0.55rem',
+                        borderRadius: '6px',
+                        textTransform: 'lowercase',
+                        letterSpacing: '0.3px'
+                      }}>
+                        {(() => {
+                          try {
+                            return new URL(event.primary_link).hostname.replace('www.', '');
+                          } catch {
+                            return 'source';
+                          }
+                        })()}
+                      </span>
                       <span className={`impact-badge ${getImpactClass(event.impact_score)}`}>
                         ⚡ {event.impact_score}/10
                       </span>

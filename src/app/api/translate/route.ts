@@ -1,7 +1,38 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
 
-export const maxDuration = 60; // Allow 60s for translation batch
+const langCodeMap: Record<string, string> = {
+  'Hindi': 'hi',
+  'Spanish': 'es',
+  'French': 'fr',
+  'German': 'de',
+  'Chinese': 'zh-CN',
+  'Japanese': 'ja',
+  'English': 'en'
+};
+
+async function translateText(text: string, targetLang: string): Promise<string> {
+  if (!text || text.trim() === '') return '';
+  const langCode = langCodeMap[targetLang] || 'en';
+  if (langCode === 'en') return text;
+
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${langCode}&dt=t&q=${encodeURIComponent(text)}`;
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
+    if (!res.ok) throw new Error(`Google Translate status ${res.status}`);
+    const data = await res.json();
+    if (data && data[0]) {
+      return data[0].map((x: any) => x[0]).join('');
+    }
+    return text;
+  } catch (err) {
+    console.warn(`[Translate] Google Translate failed for "${text.substring(0, 20)}...", returning original:`, err);
+    return text;
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -15,77 +46,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, translatedEvents: [] });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { success: false, error: 'GEMINI_API_KEY is not configured' },
-        { status: 500 }
-      );
-    }
+    // Translate all events sequentially/concurrently using Google Translate
+    const translatedEvents = await Promise.all(
+      events.map(async (e: any) => {
+        const [title, what, why, who] = await Promise.all([
+          translateText(e.title, targetLanguage),
+          translateText(e.ai_summary.what, targetLanguage),
+          translateText(e.ai_summary.why, targetLanguage),
+          translateText(e.ai_summary.who, targetLanguage)
+        ]);
 
-    const ai = new GoogleGenAI({ apiKey });
-
-    // Prepare batch input for Gemini to minimize calls and latency
-    const batchData = events.map((e: any) => ({
-      id: e.id,
-      title: e.title,
-      what: e.ai_summary.what,
-      why: e.ai_summary.why,
-      who: e.ai_summary.who,
-    }));
-
-    const prompt = `You are a professional translator. Translate the following technology event cards into ${targetLanguage}.
-Keep all technical terms, acronyms, and product names (e.g. OpenAI, LLMs, GPT, GitHub, etc.) intact if they are commonly used in the target language.
-Ensure the translation sounds professional, natural, and editorially polished.
-Do not summarize or change the meaning, only translate.
-
-Here is the JSON list of events to translate:
-${JSON.stringify(batchData, null, 2)}
-
-Return the translations in a JSON array matching the input structure exactly, with the same "id", and translated "title", "what", "why", and "who" fields.`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'ARRAY',
-          items: {
-            type: 'OBJECT',
-            properties: {
-              id: { type: 'INTEGER' },
-              title: { type: 'STRING' },
-              what: { type: 'STRING' },
-              why: { type: 'STRING' },
-              who: { type: 'STRING' }
-            },
-            required: ['id', 'title', 'what', 'why', 'who']
-          }
-        }
-      }
-    });
-
-    const text = response.text;
-    if (!text) throw new Error('Empty response from translation model');
-    const translatedList = JSON.parse(text);
-
-    // Map translated fields back to TechEvent structure
-    const translatedEvents = events.map((original: any) => {
-      const match = translatedList.find((t: any) => t.id === original.id);
-      if (match) {
         return {
-          ...original,
-          title: match.title,
-          ai_summary: {
-            what: match.what,
-            why: match.why,
-            who: match.who
-          }
+          ...e,
+          title,
+          ai_summary: { what, why, who }
         };
-      }
-      return original;
-    });
+      })
+    );
 
     return NextResponse.json({ success: true, translatedEvents });
   } catch (err: any) {

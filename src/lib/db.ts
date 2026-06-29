@@ -2,9 +2,15 @@ import { createClient, Client } from '@libsql/client';
 
 let dbInstance: Client | null = null;
 
-async function initDb(db: Client) {
-  // Enable foreign keys
-  await db.execute('PRAGMA foreign_keys = ON;');
+async function initDb(db: Client, isLocal: boolean) {
+  // Enable foreign keys on local SQLite only
+  if (isLocal) {
+    try {
+      await db.execute('PRAGMA foreign_keys = ON;');
+    } catch (e) {
+      console.warn('Could not enable foreign keys:', e);
+    }
+  }
 
   // Create sources table
   await db.execute(`
@@ -92,10 +98,16 @@ async function initDb(db: Client) {
 
 export async function getDb(): Promise<Client> {
   if (!dbInstance) {
-    const url = process.env.TURSO_DATABASE_URL || 'file:tech24.db';
-    const authToken = process.env.TURSO_AUTH_TOKEN || '';
+    const hasTurso = process.env.TURSO_DATABASE_URL && 
+                     process.env.TURSO_AUTH_TOKEN && 
+                     process.env.TURSO_AUTH_TOKEN !== 'your_auth_token_here';
+                     
+    const url = hasTurso ? process.env.TURSO_DATABASE_URL! : 'file:tech24.db';
+    const authToken = hasTurso ? process.env.TURSO_AUTH_TOKEN! : '';
+    const isLocal = url.startsWith('file:');
+    
     dbInstance = createClient({ url, authToken });
-    await initDb(dbInstance);
+    await initDb(dbInstance, isLocal);
   }
   return dbInstance;
 }

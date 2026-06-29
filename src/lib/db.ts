@@ -44,6 +44,14 @@ function initDb(db: DatabaseSync) {
     );
   `);
 
+  // Index for fast retention-policy queries
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_raw_articles_fetched_at ON raw_articles(fetched_at);
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tech_events_created_at ON tech_events(created_at);
+  `);
+
   // Create bookmarks table
   db.exec(`
     CREATE TABLE IF NOT EXISTS bookmarks (
@@ -53,22 +61,36 @@ function initDb(db: DatabaseSync) {
     );
   `);
 
-  // Seed default sources if they don't exist
+  // Seed all 13 default sources if table is empty
   const checkSources = db.prepare('SELECT COUNT(*) as count FROM sources');
   const result = checkSources.get() as { count: number };
-  
+
   if (result && result.count === 0) {
     const insertSource = db.prepare('INSERT INTO sources (name, url, category) VALUES (?, ?, ?)');
-    insertSource.run('Hacker News', 'https://hacker-news.firebaseio.com/v0', 'API');
-    insertSource.run('TechCrunch', 'https://techcrunch.com/feed/', 'RSS');
-    insertSource.run('arXiv CS/AI', 'http://export.arxiv.org/api/query', 'API');
-    insertSource.run('GitHub Trending', 'https://github.com/trending', 'RSS');
+
+    // Original 4 sources
+    insertSource.run('Hacker News',    'https://hacker-news.firebaseio.com/v0',  'API');
+    insertSource.run('TechCrunch',     'https://techcrunch.com/feed/',            'RSS');
+    insertSource.run('arXiv CS/AI',    'http://export.arxiv.org/api/query',       'API');
+    insertSource.run('GitHub Trending','https://github.com/trending',             'Scrape');
+
+    // New RSS sources
+    insertSource.run('The Verge',      'https://www.theverge.com/rss/index.xml',  'RSS');
+    insertSource.run('Wired',          'https://www.wired.com/feed/rss',           'RSS');
+    insertSource.run('Ars Technica',   'http://feeds.arstechnica.com/arstechnica/index', 'RSS');
+    insertSource.run('VentureBeat',    'https://venturebeat.com/feed/',            'RSS');
+    insertSource.run('MIT Tech Review','https://www.technologyreview.com/feed/',   'RSS');
+
+    // New API / Scrape sources
+    insertSource.run('Dev.to',              'https://dev.to/api/articles',        'API');
+    insertSource.run('Product Hunt',        'https://www.producthunt.com/',       'Scrape');
+    insertSource.run('Reddit r/technology', 'https://www.reddit.com/r/technology','API');
+    insertSource.run('Reddit r/MachineLearning', 'https://www.reddit.com/r/MachineLearning', 'API');
   }
 }
 
 export function getDb(): DatabaseSync {
   if (!dbInstance) {
-    // Save the DB file in the root directory
     const dbPath = path.resolve(process.cwd(), 'tech24.db');
     dbInstance = new DatabaseSync(dbPath);
     initDb(dbInstance);

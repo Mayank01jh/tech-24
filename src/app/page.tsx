@@ -51,7 +51,7 @@ export default function Tech24Dashboard() {
   const [ingestStats, setIngestStats] = useState<any>(null);
 
   // Time-Gate Countdown State (counts down to next 30-minute block)
-  const [countdownText, setCountdownText] = useState<string>('30:00');
+  const [countdownText, setCountdownText] = useState<string>('05:00');
 
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -178,23 +178,29 @@ export default function Tech24Dashboard() {
     }
   };
 
-  // Countdown timer logic
+  // Auto-refresh feed every 5 minutes silently
+  useEffect(() => {
+    const AUTO_REFRESH_MS = 5 * 60 * 1000;
+    const refreshInterval = setInterval(() => {
+      if (activeTab === 'feed') {
+        fetchFeed();
+      }
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(refreshInterval);
+  }, [activeTab, fetchFeed]);
+
+  // Countdown timer logic — counts to next 5-minute boundary
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
-      const minutes = now.getMinutes();
-      const seconds = now.getSeconds();
-      
-      const targetMinutes = minutes >= 30 ? 60 : 30;
-      const remMin = targetMinutes - minutes - 1;
-      const remSec = 60 - seconds;
-      
-      const displayMin = String(remMin).padStart(2, '0');
-      const displaySec = String(remSec === 60 ? 0 : remSec).padStart(2, '0');
-      
-      setCountdownText(`${displayMin}:${displaySec}`);
+      const totalSeconds = now.getMinutes() * 60 + now.getSeconds();
+      // Find seconds elapsed since last 5-min mark
+      const secondsSinceMark = totalSeconds % (5 * 60);
+      const secondsRemaining = (5 * 60) - secondsSinceMark;
+      const remMin = Math.floor(secondsRemaining / 60);
+      const remSec = secondsRemaining % 60;
+      setCountdownText(`${String(remMin).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`);
     }, 1000);
-    
     return () => clearInterval(interval);
   }, []);
 
@@ -302,7 +308,7 @@ export default function Tech24Dashboard() {
           </div>
           <div className="stat-card glass-panel">
             <span className="stat-label">Sources Active</span>
-            <span className="stat-value">4 Outlets</span>
+            <span className="stat-value">13 Outlets</span>
           </div>
           <div className="stat-card glass-panel">
             <span className="stat-label">Bookmarks Saved</span>
@@ -595,8 +601,8 @@ export default function Tech24Dashboard() {
               </span>
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
-              The daily feed purges items older than 48 hours to preserve resources. Bookmarked items will never be deleted. 
-              The system crawls <strong>Hacker News top stories</strong>, <strong>arXiv computer science papers</strong>, <strong>TechCrunch feeds</strong>, and <strong>GitHub trending products</strong>.
+              News is auto-refreshed every <strong>5 minutes</strong> and purged after <strong>24 hours</strong>. Bookmarked items are never deleted.
+              Sources: <strong>Hacker News</strong>, <strong>TechCrunch</strong>, <strong>The Verge</strong>, <strong>Wired</strong>, <strong>Ars Technica</strong>, <strong>VentureBeat</strong>, <strong>MIT Tech Review</strong>, <strong>arXiv CS/AI</strong>, <strong>GitHub Trending</strong>, <strong>Dev.to</strong>, <strong>Product Hunt</strong>, <strong>Reddit r/technology</strong>, <strong>Reddit r/MachineLearning</strong>.
             </p>
           </div>
 

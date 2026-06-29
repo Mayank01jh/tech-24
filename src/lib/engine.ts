@@ -571,48 +571,34 @@ export async function runIngestionPipeline(): Promise<{
     log(`Crawling source: ${src.name}`);
     let fetched: Omit<RawArticle, 'id'>[] = [];
 
-    switch (src.name) {
-      case 'Hacker News':
-        fetched = await fetchHackerNews(src.id);
-        break;
-      case 'TechCrunch':
-        fetched = await fetchRssFeed(src.id, 'TechCrunch', 'https://techcrunch.com/feed/');
-        break;
-      case 'arXiv CS/AI':
-        fetched = await fetchArxiv(src.id);
-        break;
-      case 'GitHub Trending':
-        fetched = await fetchGitHub(src.id);
-        break;
-      case 'The Verge':
-        fetched = await fetchRssFeed(src.id, 'The Verge', 'https://www.theverge.com/rss/index.xml');
-        break;
-      case 'Wired':
-        fetched = await fetchRssFeed(src.id, 'Wired', 'https://www.wired.com/feed/rss');
-        break;
-      case 'Ars Technica':
-        fetched = await fetchRssFeed(src.id, 'Ars Technica', 'http://feeds.arstechnica.com/arstechnica/index');
-        break;
-      case 'VentureBeat':
-        fetched = await fetchRssFeed(src.id, 'VentureBeat', 'https://venturebeat.com/feed/');
-        break;
-      case 'MIT Tech Review':
-        fetched = await fetchRssFeed(src.id, 'MIT Tech Review', 'https://www.technologyreview.com/feed/');
-        break;
-      case 'Dev.to':
-        fetched = await fetchDevTo(src.id);
-        break;
-      case 'Product Hunt':
-        fetched = await fetchProductHunt(src.id);
-        break;
-      case 'Reddit r/technology':
-        fetched = await fetchReddit(src.id, 'technology');
-        break;
-      case 'Reddit r/MachineLearning':
-        fetched = await fetchReddit(src.id, 'MachineLearning');
-        break;
-      default:
-        log(`[WARN] No fetcher defined for source: ${src.name}`);
+    if (src.category === 'RSS') {
+      fetched = await fetchRssFeed(src.id, src.name, src.url);
+    } else {
+      switch (src.name) {
+        case 'Hacker News':
+          fetched = await fetchHackerNews(src.id);
+          break;
+        case 'arXiv CS/AI':
+          fetched = await fetchArxiv(src.id);
+          break;
+        case 'GitHub Trending':
+          fetched = await fetchGitHub(src.id);
+          break;
+        case 'Dev.to':
+          fetched = await fetchDevTo(src.id);
+          break;
+        case 'Product Hunt':
+          fetched = await fetchProductHunt(src.id);
+          break;
+        case 'Reddit r/technology':
+          fetched = await fetchReddit(src.id, 'technology');
+          break;
+        case 'Reddit r/MachineLearning':
+          fetched = await fetchReddit(src.id, 'MachineLearning');
+          break;
+        default:
+          log(`[WARN] No fetcher defined for source: ${src.name}`);
+      }
     }
 
     log(`Fetched ${fetched.length} recent articles from ${src.name}`);

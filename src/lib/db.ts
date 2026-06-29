@@ -66,28 +66,37 @@ async function initDb(db: Client, isLocal: boolean) {
     );
   `);
 
-  // Seed all 13 default sources if table is empty
-  const checkSources = await db.execute('SELECT COUNT(*) as count FROM sources');
-  const count = Number(checkSources.rows[0]?.count || 0);
+  // Seed default and new sources individually if missing
+  const sources = [
+    ['Hacker News',    'https://hacker-news.firebaseio.com/v0',  'API'],
+    ['TechCrunch',     'https://techcrunch.com/feed/',            'RSS'],
+    ['arXiv CS/AI',    'http://export.arxiv.org/api/query',       'API'],
+    ['GitHub Trending','https://github.com/trending',             'Scrape'],
+    ['The Verge',      'https://www.theverge.com/rss/index.xml',  'RSS'],
+    ['Wired',          'https://www.wired.com/feed/rss',           'RSS'],
+    ['Ars Technica',   'http://feeds.arstechnica.com/arstechnica/index', 'RSS'],
+    ['VentureBeat',    'https://venturebeat.com/feed/',            'RSS'],
+    ['MIT Tech Review','https://www.technologyreview.com/feed/',   'RSS'],
+    ['Dev.to',              'https://dev.to/api/articles',        'API'],
+    ['Product Hunt',        'https://www.producthunt.com/',       'Scrape'],
+    ['Reddit r/technology', 'https://www.reddit.com/r/technology','API'],
+    ['Reddit r/MachineLearning', 'https://www.reddit.com/r/MachineLearning', 'API'],
+    
+    // New 5 premium tech & AI blogs
+    ['OpenAI Blog',         'https://openai.com/blog/rss.xml',         'RSS'],
+    ['Hugging Face Blog',   'https://huggingface.co/blog/feed.xml',    'RSS'],
+    ['AWS News Blog',       'https://aws.amazon.com/blogs/aws/feed/',   'RSS'],
+    ['Engadget',            'https://www.engadget.com/rss.xml',        'RSS'],
+    ['The Register',        'https://www.theregister.com/headlines.rss', 'RSS']
+  ];
 
-  if (count === 0) {
-    const sources = [
-      ['Hacker News',    'https://hacker-news.firebaseio.com/v0',  'API'],
-      ['TechCrunch',     'https://techcrunch.com/feed/',            'RSS'],
-      ['arXiv CS/AI',    'http://export.arxiv.org/api/query',       'API'],
-      ['GitHub Trending','https://github.com/trending',             'Scrape'],
-      ['The Verge',      'https://www.theverge.com/rss/index.xml',  'RSS'],
-      ['Wired',          'https://www.wired.com/feed/rss',           'RSS'],
-      ['Ars Technica',   'http://feeds.arstechnica.com/arstechnica/index', 'RSS'],
-      ['VentureBeat',    'https://venturebeat.com/feed/',            'RSS'],
-      ['MIT Tech Review','https://www.technologyreview.com/feed/',   'RSS'],
-      ['Dev.to',              'https://dev.to/api/articles',        'API'],
-      ['Product Hunt',        'https://www.producthunt.com/',       'Scrape'],
-      ['Reddit r/technology', 'https://www.reddit.com/r/technology','API'],
-      ['Reddit r/MachineLearning', 'https://www.reddit.com/r/MachineLearning', 'API']
-    ];
-
-    for (const src of sources) {
+  for (const src of sources) {
+    const res = await db.execute({
+      sql: 'SELECT COUNT(*) as count FROM sources WHERE name = ?',
+      args: [src[0]]
+    });
+    const exists = Number(res.rows[0]?.count || 0) > 0;
+    if (!exists) {
       await db.execute({
         sql: 'INSERT INTO sources (name, url, category) VALUES (?, ?, ?)',
         args: src

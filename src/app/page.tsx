@@ -696,8 +696,6 @@ export default function Tech24Dashboard() {
           </div>
         )}
       </div>
-        </div>
-      </div>
     </div>
   );
 }

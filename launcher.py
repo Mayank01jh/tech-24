@@ -5,6 +5,14 @@ import time
 import webbrowser
 import threading
 
+# Reconfigure standard streams to UTF-8 to prevent UnicodeEncodeErrors on Windows
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 def print_banner():
     banner = """
 =========================================================

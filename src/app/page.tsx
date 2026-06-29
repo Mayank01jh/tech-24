@@ -415,25 +415,30 @@ export default function Tech24Dashboard() {
 
             <div className="events-grid">
               {(activeTab === 'feed' ? events : bookmarks).map(event => (
-                <article 
+                <article
                   key={event.id}
                   className="event-card glass-panel"
                   onClick={() => openEventDrawer(event)}
+                  onMouseMove={(e) => {
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    (e.currentTarget as HTMLElement).style.setProperty('--mouse-x', `${e.clientX - rect.left}px`);
+                    (e.currentTarget as HTMLElement).style.setProperty('--mouse-y', `${e.clientY - rect.top}px`);
+                  }}
                 >
                   <div className="card-header">
                     <div className="card-tags">
-                      <span className="category-tag">{event.category}</span>
+                      <span className="category-tag" data-category={event.category}>{event.category}</span>
                       <span className={`impact-badge ${getImpactClass(event.impact_score)}`}>
-                        {event.impact_score}/10 {getImpactLabel(event.impact_score)}
+                        ⚡ {event.impact_score}/10
                       </span>
                     </div>
-                    
-                    <button 
+
+                    <button
                       className={`bookmark-btn ${event.bookmarked ? 'active' : ''}`}
                       onClick={(e) => toggleBookmark(e, event.id)}
                       title={event.bookmarked ? 'Remove Bookmark' : 'Save Bookmark'}
                     >
-                      <svg width="20" height="20" fill={event.bookmarked ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <svg width="18" height="18" fill={event.bookmarked ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                       </svg>
                     </button>
@@ -441,15 +446,15 @@ export default function Tech24Dashboard() {
 
                   <div className="card-body">
                     <h2 className="event-title">{event.title}</h2>
-                    
-                    {/* 3-Bullet Summary Preview */}
+
+                    {/* 2-Bullet Summary Preview */}
                     <div className="bullet-list">
                       <div className="bullet-item">
-                        <span className="bullet-icon">●</span>
+                        <span className="bullet-icon">▸</span>
                         <span>{event.ai_summary.what}</span>
                       </div>
                       <div className="bullet-item">
-                        <span className="bullet-icon" style={{ color: 'var(--primary)' }}>●</span>
+                        <span className="bullet-icon">▸</span>
                         <span>{event.ai_summary.why}</span>
                       </div>
                     </div>
@@ -458,11 +463,8 @@ export default function Tech24Dashboard() {
                   <div className="card-footer">
                     <span>{formatDate(event.created_at)}</span>
                     <div className="source-badges">
-                      {/* Deduplicate source names to list badges */}
-                      {Array.from(new Set(event.articles.map(a => a.source_name))).map(srcName => (
-                        <span key={srcName} className="source-pill">
-                          {srcName}
-                        </span>
+                      {Array.from(new Set(event.articles.map(a => a.source_name))).slice(0, 3).map(srcName => (
+                        <span key={srcName} className="source-pill">{srcName}</span>
                       ))}
                     </div>
                   </div>
@@ -481,7 +483,7 @@ export default function Tech24Dashboard() {
       <div className={`drawer ${drawerOpen ? 'open' : ''}`}>
         <div className="drawer-header">
           <div>
-            <span className="category-tag" style={{ marginBottom: '0.5rem', display: 'inline-block' }}>
+            <span className="category-tag" style={{ marginBottom: '0.5rem', display: 'inline-block' }} data-category={selectedEvent?.category}>
               {selectedEvent?.category}
             </span>
             <h2 className="brand-title" style={{ fontSize: '1.4rem', WebkitTextFillColor: 'unset', color: 'white' }}>

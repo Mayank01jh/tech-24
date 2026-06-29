@@ -20,7 +20,7 @@ const triggerIngest = async () => {
 // Run immediately on startup
 triggerIngest();
 
-// Run every 5 minutes (300,000 ms)
-const INTERVAL_MS = 5 * 60 * 1000;
+// Run every 1 minutes (300,000 ms)
+const INTERVAL_MS = 1 * 60 * 1000;
 setInterval(triggerIngest, INTERVAL_MS);
 console.log(`[Daemon] Background ingestion daemon active (polling every 5 minutes).`);

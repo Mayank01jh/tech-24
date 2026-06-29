@@ -3,7 +3,7 @@ import { getDb } from '@/lib/db';
 
 export async function GET() {
   try {
-    const db = getDb();
+    const db = await getDb();
     
     // Fetch all bookmarked events (even if they are older than 24 hours)
     const query = `
@@ -11,45 +11,48 @@ export async function GET() {
       JOIN bookmarks b ON e.id = b.event_id
       ORDER BY b.bookmarked_at DESC
     `;
-    const stmt = db.prepare(query);
-    const events = stmt.all() as any[];
+    const eventsRes = await db.execute(query);
+    const events = eventsRes.rows;
 
-    // Fetch associated articles
-    const getArticlesStmt = db.prepare(`
-      SELECT r.id, r.original_title, r.url, r.fetched_at, s.name as source_name
-      FROM raw_articles r
-      JOIN sources s ON r.source_id = s.id
-      WHERE r.event_id = ?
-    `);
-
-    const enrichedEvents = events.map(event => {
-      let parsedSummary = { what: '', why: '', who: '' };
-      try {
-        if (event.ai_summary) {
-          parsedSummary = JSON.parse(event.ai_summary);
+    const enrichedEvents = await Promise.all(
+      events.map(async (event: any) => {
+        let parsedSummary = { what: '', why: '', who: '' };
+        try {
+          if (event.ai_summary) {
+            parsedSummary = JSON.parse(event.ai_summary);
+          }
+        } catch (e) {
+          parsedSummary = {
+            what: event.ai_summary || '',
+            why: 'Detailed context and impact of this update.',
+            who: 'Developers, system administrators, and industry professionals.'
+          };
         }
-      } catch (e) {
-        parsedSummary = {
-          what: event.ai_summary || '',
-          why: 'Detailed context and impact of this update.',
-          who: 'Developers, system administrators, and industry professionals.'
+
+        const articlesRes = await db.execute({
+          sql: `
+            SELECT r.id, r.original_title, r.url, r.fetched_at, s.name as source_name
+            FROM raw_articles r
+            JOIN sources s ON r.source_id = s.id
+            WHERE r.event_id = ?
+          `,
+          args: [event.id]
+        });
+        const articles = articlesRes.rows;
+
+        return {
+          id: event.id,
+          title: event.title,
+          ai_summary: parsedSummary,
+          impact_score: event.impact_score,
+          category: event.category,
+          primary_link: event.primary_link,
+          created_at: event.created_at,
+          bookmarked: true,
+          articles
         };
-      }
-
-      const articles = getArticlesStmt.all(event.id) as any[];
-
-      return {
-        id: event.id,
-        title: event.title,
-        ai_summary: parsedSummary,
-        impact_score: event.impact_score,
-        category: event.category,
-        primary_link: event.primary_link,
-        created_at: event.created_at,
-        bookmarked: true,
-        articles
-      };
-    });
+      })
+    );
 
     return NextResponse.json(enrichedEvents);
   } catch (err: any) {
@@ -68,22 +71,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'eventId is required' }, { status: 400 });
     }
 
-    const db = getDb();
+    const db = await getDb();
 
     // Check if bookmark exists
-    const checkStmt = db.prepare('SELECT COUNT(*) as count FROM bookmarks WHERE event_id = ?');
-    const result = checkStmt.get(eventId) as { count: number };
-    const exists = result ? result.count > 0 : false;
+    const checkRes = await db.execute({
+      sql: 'SELECT COUNT(*) as count FROM bookmarks WHERE event_id = ?',
+      args: [eventId]
+    });
+    const count = Number(checkRes.rows[0]?.count || 0);
+    const exists = count > 0;
 
     if (exists) {
       // Remove bookmark
-      const deleteStmt = db.prepare('DELETE FROM bookmarks WHERE event_id = ?');
-      deleteStmt.run(eventId);
+      await db.execute({
+        sql: 'DELETE FROM bookmarks WHERE event_id = ?',
+        args: [eventId]
+      });
       return NextResponse.json({ bookmarked: false });
     } else {
       // Add bookmark
-      const insertStmt = db.prepare('INSERT INTO bookmarks (event_id, bookmarked_at) VALUES (?, datetime(\'now\', \'utc\'))');
-      insertStmt.run(eventId);
+      await db.execute({
+        sql: 'INSERT INTO bookmarks (event_id, bookmarked_at) VALUES (?, datetime(\'now\', \'utc\'))',
+        args: [eventId]
+      });
       return NextResponse.json({ bookmarked: true });
     }
   } catch (err: any) {

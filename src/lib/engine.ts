@@ -374,6 +374,47 @@ function generateFallbackEvent(title: string, link: string): ClusteredEvent {
 // ─────────────────────────────────────────────────────────────
 // 4. Scraper and Gemini API Curation
 // ─────────────────────────────────────────────────────────────
+
+// Rate limiter: Gemini free tier allows 5 req/min.
+// We allow max 4/min — one call every 15 seconds.
+const geminiCallTimestamps: number[] = [];
+const GEMINI_WINDOW_MS = 60_000;
+const GEMINI_MAX_PER_WINDOW = 4;
+const GEMINI_MIN_GAP_MS = 15_000;
+
+async function waitForGeminiSlot(): Promise<void> {
+  const now = Date.now();
+  // Evict timestamps older than 60s
+  while (geminiCallTimestamps.length > 0 && now - geminiCallTimestamps[0] > GEMINI_WINDOW_MS) {
+    geminiCallTimestamps.shift();
+  }
+
+  // If we already have GEMINI_MAX_PER_WINDOW calls in the last minute, wait
+  if (geminiCallTimestamps.length >= GEMINI_MAX_PER_WINDOW) {
+    const oldestInWindow = geminiCallTimestamps[0];
+    const waitMs = GEMINI_WINDOW_MS - (now - oldestInWindow) + 500; // +500ms buffer
+    console.log(`[RateLimit] Gemini quota window full. Waiting ${Math.round(waitMs / 1000)}s...`);
+    await new Promise(r => setTimeout(r, waitMs));
+    geminiCallTimestamps.shift();
+  }
+
+  // Also enforce a minimum gap between consecutive calls
+  if (geminiCallTimestamps.length > 0) {
+    const lastCall = geminiCallTimestamps[geminiCallTimestamps.length - 1];
+    const gap = Date.now() - lastCall;
+    if (gap < GEMINI_MIN_GAP_MS) {
+      const waitMs = GEMINI_MIN_GAP_MS - gap;
+      console.log(`[RateLimit] Spacing Gemini calls. Waiting ${Math.round(waitMs / 1000)}s...`);
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  }
+
+  geminiCallTimestamps.push(Date.now());
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
 async function scrapeUrl(url: string): Promise<string> {
   if (url.endsWith('.pdf')) return '';
 
@@ -427,9 +468,7 @@ async function generateGeminiEvent(titles: string[], articlesListText: string, p
     ? `\nHere is the scraped content from the primary article for background context:\n\"\"\"\n${scrapedContent}\n\"\"\"\n`
     : '\n(No additional article text available; summarize using titles only)\n';
 
-  try {
-    const ai = new GoogleGenAI({ apiKey });
-    const prompt = `You are a professional editor for Tech24, a daily news aggregator.
+  const prompt = `You are a professional editor for Tech24, a daily news aggregator.
 We have grouped multiple news articles referring to the same tech event.
 Here is the list of original headlines and URLs:
 ${articlesListText}
@@ -442,42 +481,66 @@ Generate a combined JSON response summarizing this event. Follow the schema exac
 - summary_why: Why does it matter to the industry? (Exactly 1 clear sentence).
 - summary_who: Who is impacted by this change? (Exactly 1 clear sentence).`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'OBJECT',
-          properties: {
-            title: { type: 'STRING' },
-            category: { type: 'STRING', enum: ['AI/ML', 'Development', 'Business/Tech', 'Science'] },
-            impact_score: { type: 'INTEGER' },
-            summary_what: { type: 'STRING' },
-            summary_why: { type: 'STRING' },
-            summary_who: { type: 'STRING' }
-          },
-          required: ['title', 'category', 'impact_score', 'summary_what', 'summary_why', 'summary_who']
-        }
-      }
-    });
+  const MAX_RETRIES = 3;
 
-    const text = response.text;
-    if (!text) throw new Error('Empty response text from Gemini');
-    const data = JSON.parse(text);
-    return {
-      title: data.title || titles[0],
-      category: data.category || 'Development',
-      impact_score: Math.min(Math.max(Number(data.impact_score) || 5, 1), 10),
-      summary_what: data.summary_what,
-      summary_why: data.summary_why,
-      summary_who: data.summary_who,
-      primary_link: primaryLink
-    };
-  } catch (err) {
-    console.error('[AI Engine] Error with Gemini API, falling back to heuristic:', err);
-    return generateFallbackEvent(titles[0], primaryLink);
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // Wait for a safe slot before each call
+    await waitForGeminiSlot();
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              title: { type: 'STRING' },
+              category: { type: 'STRING', enum: ['AI/ML', 'Development', 'Business/Tech', 'Science'] },
+              impact_score: { type: 'INTEGER' },
+              summary_what: { type: 'STRING' },
+              summary_why: { type: 'STRING' },
+              summary_who: { type: 'STRING' }
+            },
+            required: ['title', 'category', 'impact_score', 'summary_what', 'summary_why', 'summary_who']
+          }
+        }
+      });
+
+      const text = response.text;
+      if (!text) throw new Error('Empty response text from Gemini');
+      const data = JSON.parse(text);
+      return {
+        title: data.title || titles[0],
+        category: data.category || 'Development',
+        impact_score: Math.min(Math.max(Number(data.impact_score) || 5, 1), 10),
+        summary_what: data.summary_what,
+        summary_why: data.summary_why,
+        summary_who: data.summary_who,
+        primary_link: primaryLink
+      };
+    } catch (err: any) {
+      const is429 = err?.message?.includes('429') || err?.status === 429;
+
+      if (is429 && attempt < MAX_RETRIES) {
+        // Extract retry-after from error message if present, else use exponential backoff
+        const retryAfterMatch = err?.message?.match(/(\d+(?:\.\d+)?)s/);
+        const retryAfterSec = retryAfterMatch ? Math.ceil(parseFloat(retryAfterMatch[1])) + 2 : 30 * attempt;
+        console.warn(`[AI Engine] Rate limited (429). Attempt ${attempt}/${MAX_RETRIES}. Retrying in ${retryAfterSec}s...`);
+        await sleep(retryAfterSec * 1000);
+        continue;
+      }
+
+      // Non-429 error or exhausted retries — use fallback
+      console.error(`[AI Engine] Gemini failed after ${attempt} attempt(s), using heuristic fallback:`, err?.message || err);
+      return generateFallbackEvent(titles[0], primaryLink);
+    }
   }
+
+  // Should never reach here but TypeScript requires it
+  return generateFallbackEvent(titles[0], primaryLink);
 }
 
 // ─────────────────────────────────────────────────────────────

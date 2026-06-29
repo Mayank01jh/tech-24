@@ -486,7 +486,7 @@ export default function Tech24Dashboard() {
             <span className="category-tag" style={{ marginBottom: '0.5rem', display: 'inline-block' }} data-category={selectedEvent?.category}>
               {selectedEvent?.category}
             </span>
-            <h2 className="brand-title" style={{ fontSize: '1.4rem', WebkitTextFillColor: 'unset', color: 'white' }}>
+            <h2 className="brand-title" style={{ fontSize: '1.4rem', WebkitTextFillColor: 'unset' }}>
               Event Intel
             </h2>
           </div>
@@ -503,8 +503,8 @@ export default function Tech24Dashboard() {
         {selectedEvent && (
           <div className="drawer-content">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className={`impact-badge ${getImpactClass(selectedEvent.impact_score)}`} style={{ fontSize: '0.9rem', padding: '0.4rem 0.8rem' }}>
-                Impact Score: {selectedEvent.impact_score}/10
+              <span className={`impact-badge ${getImpactClass(selectedEvent.impact_score)}`} style={{ fontSize: '0.85rem', padding: '0.4rem 0.9rem' }}>
+                ⚡ {selectedEvent.impact_score}/10 &mdash; {getImpactLabel(selectedEvent.impact_score)} Impact
               </span>
               <button 
                 className={`bookmark-btn ${selectedEvent.bookmarked ? 'active' : ''}`}
@@ -517,7 +517,7 @@ export default function Tech24Dashboard() {
               </button>
             </div>
 
-            <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.4rem', color: 'white', lineHeight: '1.3' }}>
+            <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.3rem', color: 'var(--text-primary)', lineHeight: '1.4', fontWeight: 700 }}>
               {selectedEvent.title}
             </h3>
 

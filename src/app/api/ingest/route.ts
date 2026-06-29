@@ -3,7 +3,7 @@ import { runIngestionPipeline } from '@/lib/engine';
 
 export const maxDuration = 60; // Allow it to run up to 60 seconds (Next.js serverless config)
 
-export async function POST() {
+async function handleIngest() {
   try {
     const result = await runIngestionPipeline();
     return NextResponse.json({
@@ -17,4 +17,12 @@ export async function POST() {
       { status: 500 }
     );
   }
+}
+
+export async function POST() {
+  return handleIngest();
+}
+
+export async function GET() {
+  return handleIngest();
 }

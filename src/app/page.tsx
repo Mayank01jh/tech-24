@@ -388,7 +388,7 @@ export default function Tech24Dashboard() {
             </button>
 
             {/* Language Selector Dropdown */}
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', flex: 1 }}>
               {isTranslating && (
                 <div style={{ position: 'absolute', left: '-22px', display: 'flex', alignItems: 'center' }}>
                   <svg className="spin-icon" width="14" height="14" viewBox="0 0 38 38" stroke="var(--purple)">
@@ -403,11 +403,12 @@ export default function Tech24Dashboard() {
                 className="sort-select"
                 style={{
                   fontSize: '0.8rem',
-                  padding: '0.45rem 2rem 0.45rem 0.75rem',
+                  padding: '0.45rem 2.2rem 0.45rem 0.75rem',
                   height: '34px',
                   borderRadius: '10px',
-                  background: 'rgba(139,92,246,0.06)',
-                  border: '1px solid var(--border-light)'
+                  backgroundColor: 'rgba(139,92,246,0.06)',
+                  border: '1px solid var(--border-light)',
+                  width: '100%'
                 }}
                 value={lang}
                 onChange={e => setLang(e.target.value)}

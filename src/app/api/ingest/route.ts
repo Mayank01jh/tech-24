@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { runIngestionPipeline } from '@/lib/engine';
 
 export const maxDuration = 60; // Allow it to run up to 60 seconds (Next.js serverless config)
+export const dynamic = 'force-dynamic';
 
 async function handleIngest() {
   try {

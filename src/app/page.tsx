@@ -159,6 +159,9 @@ export default function Tech24Dashboard() {
   const [countdownText, setCountdownText] = useState<string>('01:00');
   const [countdownPct, setCountdownPct] = useState<number>(100);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [lang, setLang] = useState<string>('English');
+  const [isTranslating, setIsTranslating] = useState<boolean>(false);
+  const [translationCache, setTranslationCache] = useState<Record<string, Record<number, TechEvent>>>({});
 
   useEffect(() => {
     const saved = localStorage.getItem('theme') as 'dark' | 'light' || 'dark';
@@ -290,7 +293,61 @@ export default function Tech24Dashboard() {
     events.length ? (events.reduce((s, e) => s + e.impact_score, 0) / events.length).toFixed(1) : '—',
   [events]);
 
-  const displayEvents = activeTab === 'feed' ? events : bookmarks;
+  const translatedEvents = useMemo(() => {
+    if (lang === 'English') return events;
+    return events.map(e => translationCache[lang]?.[e.id] || e);
+  }, [events, lang, translationCache]);
+
+  const translatedBookmarks = useMemo(() => {
+    if (lang === 'English') return bookmarks;
+    return bookmarks.map(e => translationCache[lang]?.[e.id] || e);
+  }, [bookmarks, lang, translationCache]);
+
+  const displayEvents = activeTab === 'feed' ? translatedEvents : translatedBookmarks;
+
+  const displaySelectedEvent = useMemo(() => {
+    if (!selectedEvent) return null;
+    if (lang === 'English') return selectedEvent;
+    return translationCache[lang]?.[selectedEvent.id] || selectedEvent;
+  }, [selectedEvent, lang, translationCache]);
+
+  // Translate missing events in the background when language changes
+  useEffect(() => {
+    if (lang === 'English') return;
+
+    const currentList = activeTab === 'feed' ? events : bookmarks;
+    const missing = currentList.filter(e => !translationCache[lang]?.[e.id]);
+
+    if (missing.length === 0) return;
+
+    const translateBatch = async () => {
+      setIsTranslating(true);
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ events: missing, targetLanguage: lang })
+        });
+        if (!res.ok) throw new Error('Translation failed');
+        const data = await res.json();
+        if (data.success && data.translatedEvents) {
+          setTranslationCache(prev => {
+            const langCache = { ...(prev[lang] || {}) };
+            data.translatedEvents.forEach((te: TechEvent) => {
+              langCache[te.id] = te;
+            });
+            return { ...prev, [lang]: langCache };
+          });
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsTranslating(false);
+      }
+    };
+
+    translateBatch();
+  }, [lang, events, bookmarks, activeTab]);
 
   return (
     <div className="app-container">
@@ -329,6 +386,41 @@ export default function Tech24Dashboard() {
               </svg>
               Analytics
             </button>
+
+            {/* Language Selector Dropdown */}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              {isTranslating && (
+                <div style={{ position: 'absolute', left: '-22px', display: 'flex', alignItems: 'center' }}>
+                  <svg className="spin-icon" width="14" height="14" viewBox="0 0 38 38" stroke="var(--purple)">
+                    <g fill="none" fillRule="evenodd"><g transform="translate(1 1)" strokeWidth="3">
+                      <circle strokeOpacity=".2" cx="18" cy="18" r="18" />
+                      <path d="M36 18c0-9.94-8.06-18-18-18" />
+                    </g></g>
+                  </svg>
+                </div>
+              )}
+              <select
+                className="sort-select"
+                style={{
+                  fontSize: '0.8rem',
+                  padding: '0.45rem 2rem 0.45rem 0.75rem',
+                  height: '34px',
+                  borderRadius: '10px',
+                  background: 'rgba(139,92,246,0.06)',
+                  border: '1px solid var(--border-light)'
+                }}
+                value={lang}
+                onChange={e => setLang(e.target.value)}
+              >
+                <option value="English">🇺🇸 English</option>
+                <option value="Hindi">🇮🇳 हिन्दी</option>
+                <option value="Spanish">🇪🇸 Español</option>
+                <option value="French">🇫🇷 Français</option>
+                <option value="German">🇩🇪 Deutsch</option>
+                <option value="Chinese">🇨🇳 中文</option>
+                <option value="Japanese">🇯🇵 日本語</option>
+              </select>
+            </div>
 
             <button className="control-sidebar-toggle" onClick={toggleTheme} title="Toggle theme">
               {theme === 'dark' ? (
@@ -584,9 +676,9 @@ export default function Tech24Dashboard() {
       <div className={`drawer ${drawerOpen ? 'open' : ''}`}>
         <div className="drawer-header">
           <div>
-            <span className="category-tag" style={{ marginBottom: '0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }} data-category={selectedEvent?.category}>
-              <CategoryIcon category={selectedEvent?.category || ''} />
-              {selectedEvent?.category}
+            <span className="category-tag" style={{ marginBottom: '0.5rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }} data-category={displaySelectedEvent?.category}>
+              <CategoryIcon category={displaySelectedEvent?.category || ''} />
+              {displaySelectedEvent?.category}
             </span>
             <h2 className="brand-title" style={{ fontSize: '1.4rem', WebkitTextFillColor: 'unset' }}>Event Intel</h2>
           </div>
@@ -597,18 +689,18 @@ export default function Tech24Dashboard() {
           </button>
         </div>
 
-        {selectedEvent && (
+        {displaySelectedEvent && (
           <div className="drawer-content">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span className={`impact-badge ${getImpactClass(selectedEvent.impact_score)}`} style={{ fontSize: '0.85rem', padding: '0.4rem 0.9rem' }}>
-                ⚡ {selectedEvent.impact_score}/10 — {getImpactLabel(selectedEvent.impact_score)} Impact
+              <span className={`impact-badge ${getImpactClass(displaySelectedEvent.impact_score)}`} style={{ fontSize: '0.85rem', padding: '0.4rem 0.9rem' }}>
+                ⚡ {displaySelectedEvent.impact_score}/10 — {getImpactLabel(displaySelectedEvent.impact_score)} Impact
               </span>
               <button
-                className={`bookmark-btn ${selectedEvent.bookmarked ? 'active' : ''}`}
-                onClick={e => toggleBookmark(e, selectedEvent.id)}
+                className={`bookmark-btn ${displaySelectedEvent.bookmarked ? 'active' : ''}`}
+                onClick={e => toggleBookmark(e, displaySelectedEvent.id)}
                 style={{ padding: '8px', border: '1px solid var(--border-light)', borderRadius: '10px' }}
               >
-                <svg width="18" height="18" fill={selectedEvent.bookmarked ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <svg width="18" height="18" fill={displaySelectedEvent.bookmarked ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                 </svg>
               </button>
@@ -617,12 +709,12 @@ export default function Tech24Dashboard() {
             {/* Impact visual meter */}
             <div style={{ margin: '-0.5rem 0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
-                <span>Impact Score</span><span>{selectedEvent.impact_score}/10</span>
+                <span>Impact Score</span><span>{displaySelectedEvent.impact_score}/10</span>
               </div>
               <div style={{ height: 6, background: 'rgba(255,255,255,0.07)', borderRadius: 3, overflow: 'hidden' }}>
                 <div style={{
                   height: '100%',
-                  width: `${(selectedEvent.impact_score / 10) * 100}%`,
+                  width: `${(displaySelectedEvent.impact_score / 10) * 100}%`,
                   background: `linear-gradient(90deg, #8b5cf6, #06b6d4)`,
                   borderRadius: 3,
                   boxShadow: '0 0 8px rgba(139,92,246,0.5)',
@@ -631,13 +723,13 @@ export default function Tech24Dashboard() {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
                 {[1,2,3,4,5,6,7,8,9,10].map(n => (
-                  <span key={n} style={{ color: n <= selectedEvent.impact_score ? 'var(--purple-light)' : 'var(--text-muted)', fontWeight: n <= selectedEvent.impact_score ? 700 : 400 }}>{n}</span>
+                  <span key={n} style={{ color: n <= displaySelectedEvent.impact_score ? 'var(--purple-light)' : 'var(--text-muted)', fontWeight: n <= displaySelectedEvent.impact_score ? 700 : 400 }}>{n}</span>
                 ))}
               </div>
             </div>
 
             <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '1.3rem', color: 'var(--text-primary)', lineHeight: '1.4', fontWeight: 700 }}>
-              {selectedEvent.title}
+              {displaySelectedEvent.title}
             </h3>
 
             {/* AI Briefing */}
@@ -645,23 +737,23 @@ export default function Tech24Dashboard() {
               <div className="drawer-section-title">AI Briefing</div>
               <div className="detail-bullet-card cyan">
                 <span className="detail-bullet-label">What is it?</span>
-                <p className="detail-bullet-desc">{selectedEvent.ai_summary.what}</p>
+                <p className="detail-bullet-desc">{displaySelectedEvent.ai_summary.what}</p>
               </div>
               <div className="detail-bullet-card indigo">
                 <span className="detail-bullet-label">Why does it matter?</span>
-                <p className="detail-bullet-desc">{selectedEvent.ai_summary.why}</p>
+                <p className="detail-bullet-desc">{displaySelectedEvent.ai_summary.why}</p>
               </div>
               <div className="detail-bullet-card pink">
                 <span className="detail-bullet-label">Who does it impact?</span>
-                <p className="detail-bullet-desc">{selectedEvent.ai_summary.who}</p>
+                <p className="detail-bullet-desc">{displaySelectedEvent.ai_summary.who}</p>
               </div>
             </div>
 
             {/* Sources */}
             <div>
-              <div className="drawer-section-title">Sources ({selectedEvent.articles.length})</div>
+              <div className="drawer-section-title">Sources ({displaySelectedEvent.articles.length})</div>
               <div className="sources-list">
-                {selectedEvent.articles.map(art => (
+                {displaySelectedEvent.articles.map(art => (
                   <a key={art.id} href={art.url} target="_blank" rel="noopener noreferrer" className="source-item-link" onClick={e => e.stopPropagation()}>
                     <div>
                       <div className="source-item-title">{art.original_title}</div>
@@ -681,7 +773,7 @@ export default function Tech24Dashboard() {
 
             {/* Read full article */}
             <a
-              href={selectedEvent.primary_link}
+              href={displaySelectedEvent.primary_link}
               target="_blank"
               rel="noopener noreferrer"
               className="btn-primary"

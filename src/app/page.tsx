@@ -157,9 +157,7 @@ export default function Tech24Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
   const [controlDrawerOpen, setControlDrawerOpen] = useState<boolean>(false);
   const [analyticsOpen, setAnalyticsOpen] = useState<boolean>(false);
-  const [isIngesting, setIsIngesting] = useState<boolean>(false);
-  const [ingestLogs, setIngestLogs] = useState<string[]>([]);
-  const [ingestStats, setIngestStats] = useState<any>(null);
+  const [controlDrawerOpen, setControlDrawerOpen] = useState<boolean>(false);
   const [countdownText, setCountdownText] = useState<string>('01:00');
   const [countdownPct, setCountdownPct] = useState<number>(100);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -241,24 +239,6 @@ export default function Tech24Dashboard() {
     } catch (err) { console.error(err); }
   };
 
-  const triggerIngestion = async () => {
-    setIsIngesting(true);
-    setIngestStats(null);
-    setIngestLogs(['[SYSTEM] Starting pipeline crawl request...']);
-    try {
-      const res = await fetch('/api/ingest', { method: 'POST' });
-      const result = await res.json();
-      if (result.success) {
-        setIngestStats({ fetched: result.articlesFetched, newCount: result.newArticles, created: result.eventsCreated });
-        setIngestLogs(result.logs || ['[SYSTEM] Crawl succeeded!']);
-        if (activeTab === 'feed') fetchFeed();
-      } else {
-        setIngestLogs(prev => [...prev, `[ERROR] ${result.error}`]);
-      }
-    } catch (err: any) {
-      setIngestLogs(prev => [...prev, `[ERROR] ${err.message}`]);
-    } finally { setIsIngesting(false); }
-  };
 
   const getImpactClass = (s: number) => s >= 8 ? 'high' : s >= 5 ? 'mid' : 'low';
   const getImpactLabel = (s: number) => s >= 8 ? 'High' : s >= 5 ? 'Med' : 'Low';
@@ -363,14 +343,6 @@ export default function Tech24Dashboard() {
                 </svg>
               )}
               {theme === 'dark' ? 'Light' : 'Dark'}
-            </button>
-
-            <button className="control-sidebar-toggle" onClick={() => setControlDrawerOpen(true)}>
-              <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              Control
             </button>
           </div>
         </header>
@@ -524,8 +496,11 @@ export default function Tech24Dashboard() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
                 </svg>
                 <h3 className="empty-title">Feed is empty</h3>
-                <p className="empty-desc">No events in the last 24 hours. Open the Control Panel and trigger ingestion to crawl fresh tech news!</p>
-                <button className="btn-primary" onClick={() => setControlDrawerOpen(true)}>Open Control Panel</button>
+                <p className="empty-desc">No events in the last 24 hours. The crawler runs automatically every 1 minute — check back soon!</p>
+                <button className="btn-primary" onClick={fetchFeed}>
+                  <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  Refresh Feed
+                </button>
               </div>
             )}
 
@@ -723,96 +698,6 @@ export default function Tech24Dashboard() {
           </div>
         )}
       </div>
-
-      {/* ── CONTROL PANEL DRAWER ── */}
-      <div className={`drawer-backdrop ${controlDrawerOpen ? 'open' : ''}`} onClick={() => setControlDrawerOpen(false)} />
-      <div className={`drawer ${controlDrawerOpen ? 'open' : ''}`}>
-        <div className="drawer-header">
-          <div>
-            <h2 className="brand-title" style={{ fontSize: '1.4rem', WebkitTextFillColor: 'unset' }}>Control Panel</h2>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>Crawler Console — 10 active sources</p>
-          </div>
-          <button className="drawer-close" onClick={() => setControlDrawerOpen(false)}>
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="drawer-content">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div className="drawer-section-title" style={{ margin: 0, flex: 1 }}>Pipeline Status</div>
-            <span className={`status-badge-pipeline ${isIngesting ? 'running' : ''}`}>
-              {isIngesting ? '⚙ Running' : '● Idle'}
-            </span>
-          </div>
-
-          <button className="btn-primary" onClick={triggerIngestion} disabled={isIngesting} style={{ width: '100%', justifyContent: 'center' }}>
-            {isIngesting ? (
-              <><svg className="spin-icon" width="16" height="16" viewBox="0 0 38 38" stroke="currentColor"><g fill="none"><g transform="translate(1 1)" strokeWidth="3"><circle strokeOpacity=".4" cx="18" cy="18" r="18" /><path d="M36 18c0-9.94-8.06-18-18-18" /></g></g></svg>Crawling…</>
-            ) : (
-              <><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>Trigger Ingestion Now</>
-            )}
-          </button>
-
-          {ingestStats && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
-              {[
-                { label: 'Fetched', value: ingestStats.fetched, color: '#8b5cf6' },
-                { label: 'New', value: ingestStats.newCount, color: '#10b981' },
-                { label: 'Events', value: ingestStats.created, color: '#06b6d4' },
-              ].map(s => (
-                <div key={s.label} className="glass-panel" style={{ padding: '0.85rem', textAlign: 'center', borderTop: `2px solid ${s.color}` }}>
-                  <div style={{ fontFamily: 'var(--font-title)', fontSize: '1.5rem', fontWeight: 800, color: s.color }}>{s.value}</div>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.8px' }}>{s.label}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div>
-            <div className="drawer-section-title">Crawler Log</div>
-            <div className="log-terminal">
-              {ingestLogs.length === 0
-                ? <span style={{ color: 'var(--text-muted)' }}>Waiting for crawl trigger…</span>
-                : ingestLogs.map((log, i) => <div key={i} className="log-entry">{log}</div>)
-              }
-            </div>
-          </div>
-
-          <div>
-            <div className="drawer-section-title">Active Sources</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-              {['Hacker News','TechCrunch','GitHub Trending','The Verge','Wired','Ars Technica','VentureBeat','Dev.to','arXiv CS/AI','MIT Tech Review'].map((src, i) => (
-                <div key={src} style={{
-                  display: 'flex', alignItems: 'center', gap: '0.5rem',
-                  padding: '0.6rem 0.8rem', borderRadius: '10px',
-                  background: 'rgba(139,92,246,0.04)', border: '1px solid var(--border-light)',
-                  fontSize: '0.78rem', color: 'var(--text-secondary)',
-                }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#10b981', flexShrink: 0, boxShadow: '0 0 5px #10b981' }} />
-                  {src}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="drawer-section-title">System Config</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-              {[
-                { key: 'Poll Interval', val: '1 minute' },
-                { key: 'Retention', val: '24 hours' },
-                { key: 'AI Model', val: 'Gemini 2.5 Flash' },
-                { key: 'Clustering', val: 'Jaccard ≥ 0.22' },
-              ].map(item => (
-                <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', padding: '0.5rem 0', borderBottom: '1px solid var(--border-light)' }}>
-                  <span style={{ color: 'var(--text-muted)' }}>{item.key}</span>
-                  <span style={{ color: 'var(--purple-light)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{item.val}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
     </div>

@@ -2,6 +2,8 @@ import Parser from 'rss-parser';
 import { getDb } from './db';
 import { GoogleGenAI } from '@google/genai';
 
+const globalForIngest = globalThis as unknown as { isIngestionRunning?: boolean };
+
 interface RawArticle {
   id?: number;
   event_id?: number | null;
@@ -380,36 +382,35 @@ function generateFallbackEvent(title: string, link: string): ClusteredEvent {
 const geminiCallTimestamps: number[] = [];
 const GEMINI_WINDOW_MS = 60_000;
 const GEMINI_MAX_PER_WINDOW = 4;
-const GEMINI_MIN_GAP_MS = 15_000;
+const GEMINI_MIN_GAP_MS = 5_000;
 
-async function waitForGeminiSlot(): Promise<void> {
+async function canGetGeminiSlot(): Promise<boolean> {
   const now = Date.now();
   // Evict timestamps older than 60s
   while (geminiCallTimestamps.length > 0 && now - geminiCallTimestamps[0] > GEMINI_WINDOW_MS) {
     geminiCallTimestamps.shift();
   }
 
-  // If we already have GEMINI_MAX_PER_WINDOW calls in the last minute, wait
+  // If we already have GEMINI_MAX_PER_WINDOW calls in the last minute, we would have to wait
   if (geminiCallTimestamps.length >= GEMINI_MAX_PER_WINDOW) {
-    const oldestInWindow = geminiCallTimestamps[0];
-    const waitMs = GEMINI_WINDOW_MS - (now - oldestInWindow) + 500; // +500ms buffer
-    console.log(`[RateLimit] Gemini quota window full. Waiting ${Math.round(waitMs / 1000)}s...`);
-    await new Promise(r => setTimeout(r, waitMs));
-    geminiCallTimestamps.shift();
+    return false;
   }
 
   // Also enforce a minimum gap between consecutive calls
   if (geminiCallTimestamps.length > 0) {
     const lastCall = geminiCallTimestamps[geminiCallTimestamps.length - 1];
-    const gap = Date.now() - lastCall;
+    const gap = now - lastCall;
     if (gap < GEMINI_MIN_GAP_MS) {
       const waitMs = GEMINI_MIN_GAP_MS - gap;
-      console.log(`[RateLimit] Spacing Gemini calls. Waiting ${Math.round(waitMs / 1000)}s...`);
-      await new Promise(r => setTimeout(r, waitMs));
+      if (waitMs > 2000) {
+        return false;
+      }
+      await sleep(waitMs);
     }
   }
 
   geminiCallTimestamps.push(Date.now());
+  return true;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -461,6 +462,12 @@ async function generateGeminiEvent(titles: string[], articlesListText: string, p
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return generateFallbackEvent(titles[0], primaryLink);
 
+  const hasSlot = await canGetGeminiSlot();
+  if (!hasSlot) {
+    console.log(`[RateLimit] Gemini slot not available immediately. Using heuristic fallback.`);
+    return generateFallbackEvent(titles[0], primaryLink);
+  }
+
   console.log(`[Ingest] Scraping content from primary link: ${primaryLink}`);
   const scrapedContent = await scrapeUrl(primaryLink);
 
@@ -484,8 +491,6 @@ Generate a combined JSON response summarizing this event. Follow the schema exac
   const MAX_RETRIES = 3;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    // Wait for a safe slot before each call
-    await waitForGeminiSlot();
 
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -528,6 +533,12 @@ Generate a combined JSON response summarizing this event. Follow the schema exac
         // Extract retry-after from error message if present, else use exponential backoff
         const retryAfterMatch = err?.message?.match(/(\d+(?:\.\d+)?)s/);
         const retryAfterSec = retryAfterMatch ? Math.ceil(parseFloat(retryAfterMatch[1])) + 2 : 30 * attempt;
+        
+        if (retryAfterSec > 2) {
+          console.warn(`[AI Engine] Rate limited (429). Retry delay ${retryAfterSec}s is too long for serverless. Falling back.`);
+          return generateFallbackEvent(titles[0], primaryLink);
+        }
+
         console.warn(`[AI Engine] Rate limited (429). Attempt ${attempt}/${MAX_RETRIES}. Retrying in ${retryAfterSec}s...`);
         await sleep(retryAfterSec * 1000);
         continue;
@@ -558,8 +569,20 @@ export async function runIngestionPipeline(): Promise<{
     logs.push(`[${new Date().toISOString()}] ${msg}`);
   };
 
-  log('Starting ingestion pipeline...');
-  const db = await getDb();
+  if (globalForIngest.isIngestionRunning) {
+    log('Ingestion pipeline is already running. Skipping this trigger.');
+    return {
+      articlesFetched: 0,
+      newArticles: 0,
+      eventsCreated: 0,
+      logs
+    };
+  }
+
+  globalForIngest.isIngestionRunning = true;
+  try {
+    log('Starting ingestion pipeline...');
+    const db = await getDb();
 
   const getSourcesRes = await db.execute('SELECT * FROM sources');
   const dbSources = getSourcesRes.rows as unknown as { id: number; name: string; url: string; category: string }[];
@@ -567,54 +590,70 @@ export async function runIngestionPipeline(): Promise<{
   let totalFetched = 0;
   const allRawArticles: Omit<RawArticle, 'id'>[] = [];
 
-  for (const src of dbSources) {
-    log(`Crawling source: ${src.name}`);
-    let fetched: Omit<RawArticle, 'id'>[] = [];
-
-    if (src.category === 'RSS') {
-      fetched = await fetchRssFeed(src.id, src.name, src.url);
-    } else {
-      switch (src.name) {
-        case 'Hacker News':
-          fetched = await fetchHackerNews(src.id);
-          break;
-        case 'arXiv CS/AI':
-          fetched = await fetchArxiv(src.id);
-          break;
-        case 'GitHub Trending':
-          fetched = await fetchGitHub(src.id);
-          break;
-        case 'Dev.to':
-          fetched = await fetchDevTo(src.id);
-          break;
-        case 'Product Hunt':
-          fetched = await fetchProductHunt(src.id);
-          break;
-        case 'Reddit r/technology':
-          fetched = await fetchReddit(src.id, 'technology');
-          break;
-        case 'Reddit r/MachineLearning':
-          fetched = await fetchReddit(src.id, 'MachineLearning');
-          break;
-        default:
-          log(`[WARN] No fetcher defined for source: ${src.name}`);
+  log('Crawling sources in parallel...');
+  const fetchPromises = dbSources.map(async (src) => {
+    try {
+      let fetched: Omit<RawArticle, 'id'>[] = [];
+      if (src.category === 'RSS') {
+        fetched = await fetchRssFeed(src.id, src.name, src.url);
+      } else {
+        switch (src.name) {
+          case 'Hacker News':
+            fetched = await fetchHackerNews(src.id);
+            break;
+          case 'arXiv CS/AI':
+            fetched = await fetchArxiv(src.id);
+            break;
+          case 'GitHub Trending':
+            fetched = await fetchGitHub(src.id);
+            break;
+          case 'Dev.to':
+            fetched = await fetchDevTo(src.id);
+            break;
+          case 'Product Hunt':
+            fetched = await fetchProductHunt(src.id);
+            break;
+          case 'Reddit r/technology':
+            fetched = await fetchReddit(src.id, 'technology');
+            break;
+          case 'Reddit r/MachineLearning':
+            fetched = await fetchReddit(src.id, 'MachineLearning');
+            break;
+          default:
+            log(`[WARN] No fetcher defined for source: ${src.name}`);
+        }
       }
+      return fetched;
+    } catch (err: any) {
+      log(`[ERROR] Failed to fetch source ${src.name}: ${err.message}`);
+      return [];
     }
+  });
 
+  const fetchResults = await Promise.all(fetchPromises);
+  for (let i = 0; i < dbSources.length; i++) {
+    const src = dbSources[i];
+    const fetched = fetchResults[i];
     log(`Fetched ${fetched.length} recent articles from ${src.name}`);
     totalFetched += fetched.length;
     allRawArticles.push(...fetched);
   }
 
-  // Insert raw articles, skipping duplicates
-  log('Saving raw articles to database...');
+  // Insert raw articles, skipping duplicates in batch
+  log('Saving raw articles to database in batch...');
   let newArticlesCount = 0;
-  for (const art of allRawArticles) {
-    const res = await db.execute({
-      sql: 'INSERT OR IGNORE INTO raw_articles (source_id, original_title, url, fetched_at) VALUES (?, ?, ?, datetime(\'now\', \'utc\'))',
-      args: [art.source_id, art.original_title, art.url]
-    });
-    if (res.rowsAffected > 0) newArticlesCount++;
+  const insertStatements = allRawArticles.map(art => ({
+    sql: "INSERT OR IGNORE INTO raw_articles (source_id, original_title, url, fetched_at) VALUES (?, ?, ?, datetime('now', 'utc'))",
+    args: [art.source_id, art.original_title, art.url]
+  }));
+
+  const insertChunkSize = 50;
+  for (let i = 0; i < insertStatements.length; i += insertChunkSize) {
+    const chunk = insertStatements.slice(i, i + insertChunkSize);
+    const results = await db.batch(chunk, "write");
+    for (const res of results) {
+      if (res.rowsAffected > 0) newArticlesCount++;
+    }
   }
   log(`Ingested ${newArticlesCount} new unique articles.`);
 
@@ -661,6 +700,13 @@ export async function runIngestionPipeline(): Promise<{
   const getExistingEventsRes = await db.execute("SELECT id, title FROM tech_events WHERE created_at >= datetime('now', '-24 hours')");
   const existingEvents = getExistingEventsRes.rows as unknown as { id: number; title: string }[];
 
+  log('Processing and enriching clusters...');
+  const enrichedClusters: Array<{
+    cluster: RawArticle[];
+    enriched: ClusteredEvent;
+  }> = [];
+  const matchedExistingUpdates: Array<{ sql: string; args: any[] }> = [];
+
   for (const cluster of clusters) {
     const titles = cluster.map(a => a.original_title);
     
@@ -675,10 +721,10 @@ export async function runIngestionPipeline(): Promise<{
     }
 
     if (matchedExistingEventId !== null) {
-      log(`[Deduplicate] Cluster representative "${titles[0]}" matches existing event ID ${matchedExistingEventId}. Linking articles and skipping.`);
+      log(`[Deduplicate] Cluster representative "${titles[0]}" matches existing event ID ${matchedExistingEventId}. Linking articles.`);
       for (const art of cluster) {
         if (art.id) {
-          await db.execute({
+          matchedExistingUpdates.push({
             sql: 'UPDATE raw_articles SET event_id = ? WHERE id = ?',
             args: [matchedExistingEventId, art.id]
           });
@@ -697,29 +743,72 @@ export async function runIngestionPipeline(): Promise<{
       if (found) { primaryLink = found.url; break; }
     }
 
-    log(`Processing cluster: "${titles[0]}" (${cluster.length} sources)`);
-    const enriched = await generateGeminiEvent(titles, articlesListText, primaryLink);
+    log(`Enriching cluster: "${titles[0]}" (${cluster.length} sources)`);
+    let enriched;
+    if (cluster.length > 1) {
+      log('Calling Gemini API for multi-source cluster...');
+      enriched = await generateGeminiEvent(titles, articlesListText, primaryLink);
+    } else {
+      enriched = generateFallbackEvent(titles[0], primaryLink);
+    }
 
-    const summaryText = JSON.stringify({
-      what: enriched.summary_what,
-      why: enriched.summary_why,
-      who: enriched.summary_who
+    enrichedClusters.push({ cluster, enriched });
+  }
+
+  // Batch insert Matched Existing updates if any
+  if (matchedExistingUpdates.length > 0) {
+    log(`Batch updating ${matchedExistingUpdates.length} deduplicated raw articles...`);
+    const updateChunkSize = 50;
+    for (let i = 0; i < matchedExistingUpdates.length; i += updateChunkSize) {
+      const chunk = matchedExistingUpdates.slice(i, i + updateChunkSize);
+      await db.batch(chunk, "write");
+    }
+  }
+
+  // Batch insert new tech events and link articles
+  if (enrichedClusters.length > 0) {
+    log(`Batch inserting ${enrichedClusters.length} new tech events...`);
+    const eventInsertStatements = enrichedClusters.map(ec => {
+      const summaryText = JSON.stringify({
+        what: ec.enriched.summary_what,
+        why: ec.enriched.summary_why,
+        who: ec.enriched.summary_who
+      });
+      return {
+        sql: 'INSERT INTO tech_events (title, ai_summary, impact_score, category, primary_link, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\', \'utc\'))',
+        args: [ec.enriched.title, summaryText, ec.enriched.impact_score, ec.enriched.category, ec.enriched.primary_link]
+      };
     });
 
-    const eventResult = await db.execute({
-      sql: 'INSERT INTO tech_events (title, ai_summary, impact_score, category, primary_link, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\', \'utc\'))',
-      args: [enriched.title, summaryText, enriched.impact_score, enriched.category, enriched.primary_link]
-    });
+    const updateStatements: Array<{ sql: string; args: any[] }> = [];
+    const eventChunkSize = 50;
+    for (let i = 0; i < eventInsertStatements.length; i += eventChunkSize) {
+      const chunk = eventInsertStatements.slice(i, i + eventChunkSize);
+      const results = await db.batch(chunk, "write");
+      
+      for (let j = 0; j < results.length; j++) {
+        const res = results[j];
+        const newEventId = Number(res.lastInsertRowid);
+        eventsCreated++;
+        
+        const ec = enrichedClusters[i + j];
+        for (const art of ec.cluster) {
+          if (art.id) {
+            updateStatements.push({
+              sql: 'UPDATE raw_articles SET event_id = ? WHERE id = ?',
+              args: [newEventId, art.id]
+            });
+          }
+        }
+      }
+    }
 
-    const newEventId = Number(eventResult.lastInsertRowid);
-    eventsCreated++;
-
-    for (const art of cluster) {
-      if (art.id) {
-        await db.execute({
-          sql: 'UPDATE raw_articles SET event_id = ? WHERE id = ?',
-          args: [newEventId, art.id]
-        });
+    if (updateStatements.length > 0) {
+      log(`Batch updating ${updateStatements.length} raw articles with event IDs...`);
+      const updateChunkSize = 50;
+      for (let i = 0; i < updateStatements.length; i += updateChunkSize) {
+        const chunk = updateStatements.slice(i, i + updateChunkSize);
+        await db.batch(chunk, "write");
       }
     }
   }
@@ -737,6 +826,9 @@ export async function runIngestionPipeline(): Promise<{
   `);
   log(`Purged ${purgedEventsRes.rowsAffected} un-bookmarked events older than 24 hours.`);
 
-  log('Ingestion pipeline completed successfully!');
-  return { articlesFetched: totalFetched, newArticles: newArticlesCount, eventsCreated, logs };
+    log('Ingestion pipeline completed successfully!');
+    return { articlesFetched: totalFetched, newArticles: newArticlesCount, eventsCreated, logs };
+  } finally {
+    globalForIngest.isIngestionRunning = false;
+  }
 }

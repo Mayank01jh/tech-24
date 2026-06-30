@@ -35,3 +35,6 @@ tech24.db
 *.db
 *.db-journal
 *.spec
+
+.vercel
+.env*
